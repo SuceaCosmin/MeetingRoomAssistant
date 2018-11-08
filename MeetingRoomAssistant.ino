@@ -9,6 +9,9 @@
 #include <utility/Adafruit_MCP23017.h>
 
 
+#define WHITE 0x7
+#define ID "13121236217170"
+
 /*Attendants tracking related variables*/
 #define IR_ANALOG_1 A0
 #define IR_ANALOG_2 A1
@@ -50,19 +53,13 @@ RFID RC522(SDA_DIO, RESET_DIO);
 // the I2C bus.
 Adafruit_RGBLCDShield lcd = Adafruit_RGBLCDShield();
 
-// These #defines make it easy to set the backlight color
-#define RED 0x1
-#define YELLOW 0x3
-#define GREEN 0x2
-#define TEAL 0x6
-#define BLUE 0x4
-#define VIOLET 0x5
-#define WHITE 0x7
-
 //LCD keypad menu defines
 #define TIMER_SCREEN  0
 #define EXTEND_MEETING_SETING_ITEM 10
 #define EXTEND_MEETING_SETING 20
+
+/*Variable used to store to current view displayed on LCD*/
+int lcdView=0;
 
 
 //Ethernet shield initialization
@@ -77,17 +74,15 @@ EthernetClient client;
 
 unsigned long lastUpdate = millis();
 
- 
-/*Variable used to store to current view displayed on LCD*/
-int lcdView=0;
-
-
 void setup(){
   Serial.begin(9600); 
   Ethernet.begin(mac, ip, dns, gateway, subnet); 
   RC522.init();
+  
   lcd.begin(16, 2);               // start the library
   lcd.setCursor(0,0);             // set the LCD cursor position  
+  lcd.setBacklight(WHITE);
+  lcd.print("Hello, world!");
   delay(2000);
 }
 String AuthCardID;
@@ -99,70 +94,77 @@ String RoomState ="";
 int bookingTimeStamp;
 int remainingTime;
 
-int bookTime = 0;
+int BOCKING_PERIOD = 1;
 void loop()
 {   
 delay(500);
-trackAttendants();
+//trackAttendants();
+ if( RoomAvailability == true){
+    readCardIfAvailable();
+  }
 
+  if( RoomAvailability == true){
+    RoomState = "FREE";
+    freeMeetingRoomBehavior();
+   Serial.println("Meeting room status is free!");
+  }else{
+    //BUG here.. after first 
+    remainingTime = BOCKING_PERIOD*60 - (millis()/1000);
+    Serial.print("Remaining time:");
+    Serial.println(remainingTime);
+    RoomState = "BUSY";
+    Serial.println("Meeting room status changed to  bussy!");
+  }
   
-//  if( RoomAvailability == true)
-//  {
-//    
-//    RoomState = "FREE";
-//  }
-//  else
-//  {
-//    remainingTime = bookTime*60 - (millis()/1000);
-//    RoomState = "BUSY";
-//  }
-////  lcd.setCursor(0,0);    
-//  
-// // lcd.print("Room is "+RoomState);
-//
-//  if( RoomAvailability == false)
-//  {
-// //   lcd.setCursor(0,1);
-//  //  lcd.print("                ");
-// //    lcd.setCursor(0,1);
-//    char text[16]; 
-//    sprintf(text,"Wait for %d:%d",remainingTime/60,remainingTime%60);
-// //   lcd.print(text);
-//    
-//  }
-//  if(remainingTime == 0)
-//  {
-//    RoomAvailability = true;
-//  }
-//  
-//  if (RC522.isCard())
-//  {
-//    AuthCardID ="";
-//    /* If so then get its serial number */
-//    RC522.readCardSerial();
-//    Serial.println("Card detected:");
-//    for(int i=0;i<5;i++)
-//    {
-//      //Serial.print(RC522.serNum[i],DEC);
-//      //Serial.print(RC522.serNum[i],HEX); //to print card detail in Hexa Decimal format
-// 
-//      AuthCardID= String(AuthCardID+RC522.serNum[i]);
-//
-//    }
-//      boolean result= CheckCardID(AuthCardID);
-//      ServerAuthorization = result;
-//      Serial.print("Result of checkIf is : ");
-//      Serial.println(result);
-//      Serial.println(AuthCardID);
-//
-//      bookTime = 15;
-//      String bookText = "";
-//
-//}
-  
+  lcd.setCursor(0,0);     
+  lcd.print("Room is "+RoomState);
+
+  if( RoomAvailability == false)
+  {
+    lcd.setCursor(0,1);
+    lcd.print("                ");
+    lcd.setCursor(0,1);
+    char text[16]; 
+    sprintf(text,"Wait for %d:%d",remainingTime/60,remainingTime%60);
+
+    lcd.print(text);
+    
+  }
+  if(remainingTime == 0)
+  {
+    RoomAvailability = true;
+  }
    
 }
 
+void freeMeetingRoomBehavior(){
+}
+  
+void readCardIfAvailable(){
+    if (RC522.isCard()){
+    AuthCardID ="";
+    /* If so then get its serial number */
+    RC522.readCardSerial();
+    Serial.println("Card detected:");
+    for(int i=0;i<5;i++)
+    {
+      //Serial.print(RC522.serNum[i],DEC);
+      //Serial.print(RC522.serNum[i],HEX); //to print card detail in Hexa Decimal format
+ 
+      AuthCardID= String(AuthCardID+RC522.serNum[i]);
+    }
+    Serial.print("Following card is booking the meeting room: ");
+    Serial.println(AuthCardID);
+    
+    if(AuthCardID.equals(ID)){
+      RoomAvailability=false;
+      Serial.println("Detected card matches the one defined! Room is bussy now!");
+
+     }else{
+      Serial.println("The detected card does not match the one defined!Room is still free!");
+      }
+  }
+}
 /*Method used to track the the number of persons that enter/exit the meeting room*/
 void trackAttendants(){
   int firstSensor = analogRead(IR_ANALOG_1);
