@@ -4,11 +4,68 @@
  
 #include <LiquidCrystal.h>
 
+#include <Wire.h>
+#include <Adafruit_RGBLCDShield.h>
+#include <utility/Adafruit_MCP23017.h>
+
+
+/*Attendants tracking related variables*/
+#define IR_ANALOG_1 A0
+#define IR_ANALOG_2 A1
+#define IR_THRESHOLD 200
+//Defines used to  track the direction of a person
+
+#define NO_IR_SENSOR_TRIGGERED 0
+#define IR1_TRIGGERED_FIRST 1
+#define IR2_TRIGGERED_FIRST 2
+
+/*Defines used for Temperature sensor*/
+//Represents the pin on which the temperature signal is read.
+#define TEMPERATURE_ADC A2
+//Represents a coeficient that is used to deduce the temperature from ADC.
+#define TEMPERATURE_COEF_PER_ADC 0.48828125
+
+/*Varianble used to tracker the number of attendants at a meeting*/
+int numberOfPersons=0;
+boolean firstSensorTriggered=false;
+boolean secondSensorTriggered=false;
+/*Used to track which sensor triggered  first in order to determine direction */
+int sensorTriggerDirection;
+/*End of Attedants tracking related variables*/
+
+
+#define TEMPERATURE_ADC_PIN A3
+
 #define SDA_DIO 9
 #define RESET_DIO 8
+
+
 /* Create an instance of the RFID library */
 RFID RC522(SDA_DIO, RESET_DIO); 
 
+//Initialization of lcd keypad module
+// The shield uses the I2C SCL and SDA pins. On classic Arduinos
+// this is Analog 4 and 5 so you can't use those for analogRead() anymore
+// However, you can connect other I2C sensors to the I2C bus and share
+// the I2C bus.
+Adafruit_RGBLCDShield lcd = Adafruit_RGBLCDShield();
+
+// These #defines make it easy to set the backlight color
+#define RED 0x1
+#define YELLOW 0x3
+#define GREEN 0x2
+#define TEAL 0x6
+#define BLUE 0x4
+#define VIOLET 0x5
+#define WHITE 0x7
+
+//LCD keypad menu defines
+#define TIMER_SCREEN  0
+#define EXTEND_MEETING_SETING_ITEM 10
+#define EXTEND_MEETING_SETING 20
+
+
+//Ethernet shield initialization
 byte mac[] = { 
   0x90, 0xA2, 0xDA, 0x0E, 0x03, 0xE2};
 IPAddress ip(192,168,0,251);
@@ -19,6 +76,11 @@ IPAddress subnet(255,255,255,0);
 EthernetClient client;
 
 unsigned long lastUpdate = millis();
+
+ 
+/*Variable used to store to current view displayed on LCD*/
+int lcdView=0;
+
 
 void setup(){
   Serial.begin(9600); 
@@ -39,102 +101,163 @@ int remainingTime;
 
 int bookTime = 0;
 void loop()
-{ 
-  if( RoomAvailability == true)
-  {
-    
-    RoomState = "FREE";
-  }
-  else
-  {
-    remainingTime = bookTime*60 - (millis()/1000);
-    RoomState = "BUSY";
-  }
-//  lcd.setCursor(0,0);    
+{   
+delay(500);
+trackAttendants();
+
   
- // lcd.print("Room is "+RoomState);
-
-  if( RoomAvailability == false)
-  {
- //   lcd.setCursor(0,1);
-  //  lcd.print("                ");
- //    lcd.setCursor(0,1);
-    char text[16]; 
-    sprintf(text,"Wait for %d:%d",remainingTime/60,remainingTime%60);
- //   lcd.print(text);
-    
-  }
-  if(remainingTime == 0)
-  {
-    RoomAvailability = true;
-  }
-  
-  if (RC522.isCard())
-  {
-    AuthCardID ="";
-    /* If so then get its serial number */
-    RC522.readCardSerial();
-    Serial.println("Card detected:");
-    for(int i=0;i<5;i++)
-    {
-      //Serial.print(RC522.serNum[i],DEC);
-      //Serial.print(RC522.serNum[i],HEX); //to print card detail in Hexa Decimal format
- 
-      AuthCardID= String(AuthCardID+RC522.serNum[i]);
-
-    }
-      boolean result= CheckCardID(AuthCardID);
-      ServerAuthorization = result;
-      Serial.print("Result of checkIf is : ");
-      Serial.println(result);
-      Serial.println(AuthCardID);
-
-      bookTime = 15;
-      String bookText = "";
-      do
-      {
-        lcd_key = read_LCD_buttons();   // read the buttons
-        switch(lcd_key)
-        {
-           case btnUP:
-           {
-              bookTime += 15;
-              if( bookTime > 60)
-              {
-                bookTime = 60;
-              }
-              break;
-           }
-           case btnDOWN:
-           {
-              bookTime -= 15;
-              
-              if( bookTime <= 15)
-              {
-               bookTime = 15;
-              } 
-              break;
-           }
-        }
-
-      //  lcd.clear();
-      //  lcd.setCursor(0,0);  
-        bookText = String(bookTime);
-        
-      //  lcd.print(bookText);
-        delay(400);
-      }
-      while(lcd_key !=btnSELECT);
-     RoomAvailability = false; 
-  //   AddData("1",AuthCardID,"1","15");
-     bookingTimeStamp = millis()/1000;
-     remainingTime+=bookingTimeStamp;
-  }
+//  if( RoomAvailability == true)
+//  {
+//    
+//    RoomState = "FREE";
+//  }
+//  else
+//  {
+//    remainingTime = bookTime*60 - (millis()/1000);
+//    RoomState = "BUSY";
+//  }
+////  lcd.setCursor(0,0);    
+//  
+// // lcd.print("Room is "+RoomState);
+//
+//  if( RoomAvailability == false)
+//  {
+// //   lcd.setCursor(0,1);
+//  //  lcd.print("                ");
+// //    lcd.setCursor(0,1);
+//    char text[16]; 
+//    sprintf(text,"Wait for %d:%d",remainingTime/60,remainingTime%60);
+// //   lcd.print(text);
+//    
+//  }
+//  if(remainingTime == 0)
+//  {
+//    RoomAvailability = true;
+//  }
+//  
+//  if (RC522.isCard())
+//  {
+//    AuthCardID ="";
+//    /* If so then get its serial number */
+//    RC522.readCardSerial();
+//    Serial.println("Card detected:");
+//    for(int i=0;i<5;i++)
+//    {
+//      //Serial.print(RC522.serNum[i],DEC);
+//      //Serial.print(RC522.serNum[i],HEX); //to print card detail in Hexa Decimal format
+// 
+//      AuthCardID= String(AuthCardID+RC522.serNum[i]);
+//
+//    }
+//      boolean result= CheckCardID(AuthCardID);
+//      ServerAuthorization = result;
+//      Serial.print("Result of checkIf is : ");
+//      Serial.println(result);
+//      Serial.println(AuthCardID);
+//
+//      bookTime = 15;
+//      String bookText = "";
+//
+//}
   
    
 }
 
+/*Method used to track the the number of persons that enter/exit the meeting room*/
+void trackAttendants(){
+  int firstSensor = analogRead(IR_ANALOG_1);
+//  Serial.print("Analog sensor 1: ");
+//  Serial.println(firstSensor);
+  if(firstSensor > IR_THRESHOLD){
+     firstSensorTriggered=true;
+     Serial.println("First IR sensor triggered!");
+    if(sensorTriggerDirection == NO_IR_SENSOR_TRIGGERED){
+      sensorTriggerDirection =IR1_TRIGGERED_FIRST;
+      }
 
+    }
+    
+  int secondSensor = analogRead(IR_ANALOG_2);
+//  Serial.print("Analog sensor 1: ");
+//  Serial.println(firstSensor);
+  if(secondSensor > IR_THRESHOLD){
+    secondSensorTriggered=true;
+    Serial.println("Second IR sensor triggered!");
+    
+    if(sensorTriggerDirection == NO_IR_SENSOR_TRIGGERED){
+      sensorTriggerDirection = IR2_TRIGGERED_FIRST;
+     }
+     
+    }
+    
+  if(firstSensorTriggered && secondSensorTriggered){
+
+      if(sensorTriggerDirection==IR1_TRIGGERED_FIRST){
+        numberOfPersons++;
+        Serial.print("Number of persons increased: ");
+        Serial.println(numberOfPersons);
+      }else if(sensorTriggerDirection == IR2_TRIGGERED_FIRST){
+          if(numberOfPersons>0){
+            numberOfPersons--;
+            Serial.print("Number of persons decreased: ");
+            Serial.println(numberOfPersons);
+            }
+       }
+      sensorTriggerDirection= NO_IR_SENSOR_TRIGGERED;
+      firstSensorTriggered=false;
+      secondSensorTriggered=false;
+    }
+ }
+
+
+
+
+
+/*
+ * Method used to read the temperature as double result.
+*/
+int readTemperature(){
+  int adcValue=analogRead(TEMPERATURE_ADC);
+  float temperature= adcValue* TEMPERATURE_COEF_PER_ADC;
+  return temperature;
+}
+
+/***********************************
+* LCD Keypad related functionalities
+************************************/
+
+int handleMenuNavigation(int buttonPressed){
+
+  if(lcdIsOnScreen(TIMER_SCREEN) && buttonPressed==BUTTON_SELECT){
+      lcdView=EXTEND_MEETING_SETING_ITEM;
+      return EXTEND_MEETING_SETING_ITEM ;
+   }else if(lcdIsOnScreen(EXTEND_MEETING_SETING)){
+
+      if(buttonPressed==BUTTON_RIGHT){
+         //Check the incrementation counter that it did not exced max  and increment
+       }else if(buttonPressed==BUTTON_LEFT){
+         //Check the incrementation counter that it does not read 0 and decrement.
+       }else if (buttonPressed==BUTTON_SELECT){
+        // Save conviguration and move to to the previeous view.
+        lcdView = EXTEND_MEETING_SETING_ITEM;
+       }       
+   }
+   
+
+  return TIMER_SCREEN;
+ }
+
+
+/**
+ * Method used to verify if the which view is the LCD display currently at.
+ */
+boolean lcdIsOnScreen(int value){
+  return lcdView==value;
+  }
+
+/***********************************
+* Ethernet related functionalities 
+************************************/
 
 boolean CheckCardID(String CardID){
   client.connect(server, 80);
