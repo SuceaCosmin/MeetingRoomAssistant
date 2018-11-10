@@ -3,18 +3,15 @@
 #include <SPI.h>
 #include <Ethernet.h>
 #include <RFID.h>
-
 #include <TimeLib.h>
 #include <TimeAlarms.h>
- 
 #include <LiquidCrystal.h>
-
 #include <Wire.h>
 #include <Adafruit_RGBLCDShield.h>
 #include <utility/Adafruit_MCP23017.h>
 
 
-#define WHITE 0x7
+
 #define ID "13121236217170"
 
 /*Attendants tracking related variables*/
@@ -26,6 +23,7 @@
 #define NO_IR_SENSOR_TRIGGERED 0
 #define IR1_TRIGGERED_FIRST 1
 #define IR2_TRIGGERED_FIRST 2
+
 
 /*Defines used for Temperature sensor*/
 //Represents the pin on which the temperature signal is read.
@@ -42,8 +40,6 @@ int sensorTriggerDirection;
 /*End of Attedants tracking related variables*/
 
 
-#define TEMPERATURE_ADC_PIN A3
-
 #define SDA_DIO 9
 #define RESET_DIO 8
 
@@ -57,11 +53,19 @@ RFID RC522(SDA_DIO, RESET_DIO);
 // However, you can connect other I2C sensors to the I2C bus and share
 // the I2C bus.
 Adafruit_RGBLCDShield lcd = Adafruit_RGBLCDShield();
+#define WHITE 0x7
 
-//LCD keypad menu defines
-#define TIMER_SCREEN  0
-#define EXTEND_MEETING_SETING_ITEM 10
-#define EXTEND_MEETING_SETING 20
+#define MAIN_VIEW 0
+#define MENU_ITEM_EXPAND 10
+#define MENU_ITEM_EXPAND_SETTING 11
+#define MENU_ITEM_EXIT 20
+
+int currentView=0;
+int extendMeetingIndicator=1;
+int currentExtendCount=1;
+#define MAX_EXTEND_COUNT 4
+#define MIN_EXTEND_COUNT 1
+
 
 //Variable used to store the state(enables/disabled) of the below mentioned task.
 boolean T1_Disabled=false;
@@ -120,9 +124,6 @@ void setup(){
   autoCancelTask_Status=true;
   Alarm.disable(autoCancelTask);
   
-  /*Disable  the tasks at start and do the enabling only in loop.*/
-  
-  lcd.print("Hello, world!");
   delay(2000);
 
 }
@@ -137,7 +138,7 @@ int remainingTime;
 int temperature=0;
 int numberOfParticipants=0;
 //Defines the duration of a meeting in minutes.
-int BOCKING_PERIOD = 1;
+int BOCKING_PERIOD = 5;
 
 void loop()
 {   
@@ -149,17 +150,17 @@ temperature= readTemperature();
 //Serial.println("Number of participants:");
 //Serial.println(numberOfPersons);
 
+RoomAvailability=false;
+occupiedMeetingRoomBehavior();
 
  if( RoomAvailability == true){
     readCardIfAvailable();
   }
 
   if( RoomAvailability == true){
-    freeMeetingRoomBehavior();
-   //Serial.println("Meeting room status is free!");
+    freeMeetingRoomBehavior(); 
   }else{
     occupiedMeetingRoomBehavior();
-   //Serial.println("Meeting room status changed to  bussy!");
   }
   
   if(remainingTime <= 0)
@@ -175,12 +176,7 @@ void freeMeetingRoomBehavior(){
    Alarm.enable(dataSending_FreeMeetingRoom);
    T1_Disabled=false;
    }  
-  numberOfPersons=0;
-  //Display status on lcd
-  lcd.clear();
-  lcd.setCursor(0,0);     
-  lcd.print("Room is free");
- 
+  numberOfPersons=0; 
 }
 void occupiedMeetingRoomBehavior(){
   if(T2_Disabled){
@@ -191,6 +187,8 @@ void occupiedMeetingRoomBehavior(){
  }
   calculateRemainingTime();
   trackAttendants();
+  handleMenuNagivation();
+  renderView();
   if(numberOfPersons>0){
      printRemainingBookingTime();
      if(autoCancelTask_Status==true){
@@ -199,18 +197,11 @@ void occupiedMeetingRoomBehavior(){
        Serial.println("Auto-Cancel task has been disabled!"); 
       }
   }else{
-
     if(autoCancelTask_Status==false){
       Alarm.enable(autoCancelTask);
       autoCancelTask_Status=true;
       Serial.println("Auto-Cancel task has been enabled! Meeting will be canceled soon!"); 
-     }  
-
-     if(autoCancelTask_Status==true){
-        lcd.clear();
-        lcd.setCursor(0,0);     
-        lcd.print("Will be canceled");
-     }
+     }     
   }
 
 }
@@ -235,6 +226,7 @@ void readCardIfAvailable(){
    //if(CheckCardID(AuthCardID))
     {
       RoomAvailability=false;
+      currentExtendCount=1;
       //Time stamp is stored when the booking is performed in order to determine remaining time.
       bookingTimeStamp=millis()/1000;
       Serial.println("Detected card matches the one defined! Room is bussy now!");
@@ -252,7 +244,7 @@ void calculateRemainingTime(){
    int currentSecond=millis()/1000;
    //Stores how  much time passed since the  meeting room was booked
    int timeSinceBooking= currentSecond - bookingTimeStamp;
-   remainingTime = BOCKING_PERIOD*60 - timeSinceBooking;
+   remainingTime = BOCKING_PERIOD* 60 * currentExtendCount - timeSinceBooking;
 }
 void printRemainingBookingTime(){
 
@@ -261,8 +253,8 @@ void printRemainingBookingTime(){
    lcd.setCursor(0,0);     
    lcd.print("Room is occupied");
       
-   //Serial.print("Remaining time:");
-   //Serial.println(remainingTime);
+   Serial.print("Remaining time:");
+   Serial.println(remainingTime);
     
    lcd.setCursor(0,1);
    lcd.print("                ");
@@ -349,34 +341,74 @@ int readTemperature(){
 /***********************************
 * LCD Keypad related functionalities
 ************************************/
+void handleMenuNagivation(){
+ uint8_t button= lcd.readButtons();
 
-int handleMenuNavigation(int buttonPressed){
-
-  if(lcdIsOnScreen(TIMER_SCREEN) && buttonPressed==BUTTON_SELECT){
-      lcdView=EXTEND_MEETING_SETING_ITEM;
-      return EXTEND_MEETING_SETING_ITEM ;
-   }else if(lcdIsOnScreen(EXTEND_MEETING_SETING)){
-
-      if(buttonPressed==BUTTON_RIGHT){
-         //Check the incrementation counter that it did not exced max  and increment
-       }else if(buttonPressed==BUTTON_LEFT){
-         //Check the incrementation counter that it does not read 0 and decrement.
-       }else if (buttonPressed==BUTTON_SELECT){
-        // Save conviguration and move to to the previeous view.
-        lcdView = EXTEND_MEETING_SETING_ITEM;
-       }       
-   }
-   
-  return TIMER_SCREEN;
+ if(currentView == MAIN_VIEW){
+  if(button == BUTTON_SELECT){
+    currentView=MENU_ITEM_EXPAND;
+    }
+ }else if(currentView == MENU_ITEM_EXIT){
+    if(button== BUTTON_SELECT){
+      currentView = MAIN_VIEW;
+     }
+ }else if(currentView == MENU_ITEM_EXPAND){
+    if(button == BUTTON_SELECT){
+       extendMeetingIndicator=currentExtendCount;
+       currentView = MENU_ITEM_EXPAND_SETTING;
+      }else if(button == BUTTON_DOWN || button == BUTTON_UP){
+        currentView = MENU_ITEM_EXIT;
+      }
+ }else if(currentView == MENU_ITEM_EXPAND_SETTING){
+     if(button == BUTTON_SELECT){
+      currentExtendCount=extendMeetingIndicator;
+       currentView = MENU_ITEM_EXPAND;
+      }else if (button == BUTTON_RIGHT 
+                 && extendMeetingIndicator < MAX_EXTEND_COUNT){
+        extendMeetingIndicator++;
+       }else if(button == BUTTON_LEFT 
+                && extendMeetingIndicator > MIN_EXTEND_COUNT){
+                  extendMeetingIndicator--;
+        }
  }
-
-
-/**
- * Method used to verify if the which view is the LCD display currently at.
- */
-boolean lcdIsOnScreen(int value){
-  return lcdView==value;
+ }
+ void renderView(){
+  if(currentView == MAIN_VIEW){
+    if(RoomAvailability==true){
+      lcd.clear();
+      lcd.setCursor(0,0);     
+      lcd.print("Room is free");
+     }else{
+      if(numberOfPersons>0){
+         printRemainingBookingTime();
+        }else{
+        lcd.clear();
+        lcd.setCursor(0,0);     
+        lcd.print("Will be canceled");
+        }    
+     }
+        
+  }else if(currentView==MENU_ITEM_EXPAND){
+    lcd.clear();
+    lcd.setCursor(0,0);
+    lcd.print("Extend meeting");  
+    }else if (currentView == MENU_ITEM_EXPAND_SETTING){
+      lcd.clear();
+      lcd.setCursor(0,0);
+      String value= "Duration:";
+      value=value+extendMeetingIndicator;
+      value=value+"/4";
+      lcd.print(value);
+      lcd.setCursor(0,1);
+      lcd.print("-              +");
+      
+   }else if (currentView == MENU_ITEM_EXIT){
+      lcd.clear();
+      lcd.setCursor(0,0);
+      lcd.print("Exit");
   }
+  }
+
 
 /***********************************
 * Ethernet related functionalities 
