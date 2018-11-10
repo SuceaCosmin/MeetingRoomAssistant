@@ -108,8 +108,10 @@ delay(500);
     freeMeetingRoomBehavior();
    Serial.println("Meeting room status is free!");
   }else{
-    //BUG here.. after first 
-    remainingTime = BOCKING_PERIOD*60 - (millis()/1000);
+    int currentSecond=millis()/1000;
+    //Stores how  much time passed since the  meeting room was booked
+    int timeSinceBooking= currentSecond-bookingTimeStamp;
+    remainingTime = BOCKING_PERIOD*60 - timeSinceBooking;
     Serial.print("Remaining time:");
     Serial.println(remainingTime);
     RoomState = "BUSY";
@@ -158,6 +160,8 @@ void readCardIfAvailable(){
     
     if(AuthCardID.equals(ID)){
       RoomAvailability=false;
+      //Time stamp is stored when the booking is performed in order to determine remaining time.
+      bookingTimeStamp=millis()/1000;
       Serial.println("Detected card matches the one defined! Room is bussy now!");
 
      }else{
