@@ -1,3 +1,5 @@
+#include <TimeAlarms.h>
+
 #include <SPI.h>
 #include <Ethernet.h>
 #include <RFID.h>
@@ -68,6 +70,9 @@ AlarmId dataSending_FreeMeetingRoom;
 boolean T2_Disabled=true;
 AlarmId dataSending_OccupiedMeetingRoom;
 
+//Variable used to store the state(enables/disabled) of the below mentioned task.
+boolean autoCancelTask_Status;
+AlarmId autoCancelTask;
 
 /*Variable used to store to current view displayed on LCD*/
 int lcdView=0;
@@ -75,7 +80,7 @@ int lcdView=0;
 byte mac[] = { 
   0x90, 0xA2, 0xDA, 0x0E, 0x03, 0xE2};
 IPAddress ip(192,168,0,251);
-byte server[] = {192, 168,   0,  3};  
+byte server[] = {192, 168,   0,  5};  
 IPAddress myDns(192,168,0,1);
 IPAddress gateway(192,168,0,1);
 IPAddress subnet(255,255,255,0);
@@ -83,8 +88,19 @@ EthernetClient client;
 
 
 void setup(){
-  Serial.begin(9600); 
+  //Serial monitor initialization
+  Serial.begin(9600);
+  
+  //Ethernet shield initialization. 
   Ethernet.begin(mac, ip, dns, gateway, subnet); 
+   // Check connection to web service
+  bool result=testConnection();
+  if(result){
+   Serial.println("Connection with Web Service is up");
+   }else{
+   Serial.println("Connection with Web Service is down");
+  }
+  
   RC522.init();
   
   lcd.begin(16, 2);               // start the library
@@ -93,31 +109,45 @@ void setup(){
 
   /*Define the task for regular task for free meeting room related information to server*/
   dataSending_FreeMeetingRoom= Alarm.timerRepeat(5,sendFreeMeetingRoomDataToServer);
+  T1_Disabled=true;
+  Alarm.disable(dataSending_FreeMeetingRoom);
   /*Define the task for regular task for occupied meeting room related information to server*/
   dataSending_OccupiedMeetingRoom=Alarm.timerRepeat(5,sendOccupiedMeetingRoomDataToServer);
-
-  /*Disable  the tasks at start and do the enabling only in loop.*/
-  Alarm.disable(dataSending_FreeMeetingRoom);
-  T1_Disabled=true;
-  Alarm.disable(dataSending_OccupiedMeetingRoom);
   T2_Disabled=true;
+  Alarm.disable(dataSending_OccupiedMeetingRoom);
+
+  autoCancelTask=Alarm.timerRepeat(10,autoCancelMeetingTask);
+  autoCancelTask_Status=true;
+  Alarm.disable(autoCancelTask);
+  
+  /*Disable  the tasks at start and do the enabling only in loop.*/
+  
   lcd.print("Hello, world!");
   delay(2000);
-}
-String AuthCardID;
 
+}
+
+
+String AuthCardID;
 boolean RoomAvailability = true;
-String RoomState ="";
 
 int bookingTimeStamp;
 int remainingTime;
 
+int temperature=0;
+int numberOfParticipants=0;
 //Defines the duration of a meeting in minutes.
 int BOCKING_PERIOD = 1;
 
 void loop()
 {   
-Alarm.delay(1000);
+Alarm.delay(500);
+
+temperature= readTemperature();
+//Serial.print("Temperature: ");
+//Serial.println(temperature);
+//Serial.println("Number of participants:");
+//Serial.println(numberOfPersons);
 
 
  if( RoomAvailability == true){
@@ -125,36 +155,13 @@ Alarm.delay(1000);
   }
 
   if( RoomAvailability == true){
-    RoomState = "FREE";
     freeMeetingRoomBehavior();
-   Serial.println("Meeting room status is free!");
+   //Serial.println("Meeting room status is free!");
   }else{
     occupiedMeetingRoomBehavior();
-    int currentSecond=millis()/1000;
-    //Stores how  much time passed since the  meeting room was booked
-    int timeSinceBooking= currentSecond-bookingTimeStamp;
-    remainingTime = BOCKING_PERIOD*60 - timeSinceBooking;
-      
-    Serial.print("Remaining time:");
-    Serial.println(remainingTime);
-    RoomState = "BUSY";
-    Serial.println("Meeting room status changed to  bussy!");
+   //Serial.println("Meeting room status changed to  bussy!");
   }
   
-  lcd.setCursor(0,0);     
-  lcd.print("Room is "+RoomState);
-
-  if( RoomAvailability == false)
-  {
-    lcd.setCursor(0,1);
-    lcd.print("                ");
-    lcd.setCursor(0,1);
-    char text[16]; 
-    sprintf(text,"Wait for %d:%d",remainingTime/60,remainingTime%60);
-
-    lcd.print(text);
-    
-  }
   if(remainingTime <= 0)
   {
     RoomAvailability = true;
@@ -168,7 +175,12 @@ void freeMeetingRoomBehavior(){
    Alarm.enable(dataSending_FreeMeetingRoom);
    T1_Disabled=false;
    }  
-   
+  numberOfPersons=0;
+  //Display status on lcd
+  lcd.clear();
+  lcd.setCursor(0,0);     
+  lcd.print("Room is free");
+ 
 }
 void occupiedMeetingRoomBehavior(){
   if(T2_Disabled){
@@ -177,8 +189,29 @@ void occupiedMeetingRoomBehavior(){
   Alarm.enable(dataSending_OccupiedMeetingRoom); 
   T2_Disabled=false; 
  }
+  calculateRemainingTime();
+  trackAttendants();
+  if(numberOfPersons>0){
+     printRemainingBookingTime();
+     if(autoCancelTask_Status==true){
+       Alarm.disable(autoCancelTask);
+       autoCancelTask_Status=false;
+       Serial.println("Auto-Cancel task has been disabled!"); 
+      }
+  }else{
 
-  //trackAttendants();
+    if(autoCancelTask_Status==false){
+      Alarm.enable(autoCancelTask);
+      autoCancelTask_Status=true;
+      Serial.println("Auto-Cancel task has been enabled! Meeting will be canceled soon!"); 
+     }  
+
+     if(autoCancelTask_Status==true){
+        lcd.clear();
+        lcd.setCursor(0,0);     
+        lcd.print("Will be canceled");
+     }
+  }
 
 }
 
@@ -193,12 +226,14 @@ void readCardIfAvailable(){
       //Serial.print(RC522.serNum[i],DEC);
       //Serial.print(RC522.serNum[i],HEX); //to print card detail in Hexa Decimal format
  
-      AuthCardID= String(AuthCardID+RC522.serNum[i]);
+      AuthCardID= String(AuthCardID + RC522.serNum[i]);
     }
     Serial.print("Following card is booking the meeting room: ");
     Serial.println(AuthCardID);
     
-    if(AuthCardID.equals(ID)){
+    if(AuthCardID.equals(ID))
+   //if(CheckCardID(AuthCardID))
+    {
       RoomAvailability=false;
       //Time stamp is stored when the booking is performed in order to determine remaining time.
       bookingTimeStamp=millis()/1000;
@@ -209,6 +244,42 @@ void readCardIfAvailable(){
       }
   }
 }
+
+/*********************************************
+ Methods used when a meeting room is occupied.
+**********************************************/
+void calculateRemainingTime(){
+   int currentSecond=millis()/1000;
+   //Stores how  much time passed since the  meeting room was booked
+   int timeSinceBooking= currentSecond - bookingTimeStamp;
+   remainingTime = BOCKING_PERIOD*60 - timeSinceBooking;
+}
+void printRemainingBookingTime(){
+
+   //remainingTime = BOCKING_PERIOD - timeSinceBooking;
+   lcd.clear();
+   lcd.setCursor(0,0);     
+   lcd.print("Room is occupied");
+      
+   //Serial.print("Remaining time:");
+   //Serial.println(remainingTime);
+    
+   lcd.setCursor(0,1);
+   lcd.print("                ");
+   lcd.setCursor(0,1);
+   char text[16]; 
+   sprintf(text,"Wait for %d:%d",remainingTime/60 , remainingTime%60);
+
+   lcd.print(text);
+  }
+
+void autoCancelMeetingTask(){
+  RoomAvailability=true;
+  Serial.println("Meeting has been canceled since all attendts have left!");
+  Alarm.disable(autoCancelTask);
+  autoCancelTask_Status=false;
+ }
+  
 /*Method used to track the the number of persons that enter/exit the meeting room*/
 void trackAttendants(){
   int firstSensor = analogRead(IR_ANALOG_1);
@@ -216,7 +287,7 @@ void trackAttendants(){
 //  Serial.println(firstSensor);
   if(firstSensor > IR_THRESHOLD){
      firstSensorTriggered=true;
-     Serial.println("First IR sensor triggered!");
+     //Serial.println("First IR sensor triggered!");
     if(sensorTriggerDirection == NO_IR_SENSOR_TRIGGERED){
       sensorTriggerDirection =IR1_TRIGGERED_FIRST;
       }
@@ -228,7 +299,7 @@ void trackAttendants(){
 //  Serial.println(firstSensor);
   if(secondSensor > IR_THRESHOLD){
     secondSensorTriggered=true;
-    Serial.println("Second IR sensor triggered!");
+   // Serial.println("Second IR sensor triggered!");
     
     if(sensorTriggerDirection == NO_IR_SENSOR_TRIGGERED){
       sensorTriggerDirection = IR2_TRIGGERED_FIRST;
@@ -258,7 +329,7 @@ void trackAttendants(){
 
 void sendFreeMeetingRoomDataToServer(){
   int temperature=readTemperature();
-  // AddData(1,"NA",,"NA", temperature);
+  // AddData(1,"NA","NA", temperature);
   Serial.println("Sending data to server in free meeting room behavior.");
 }
 void sendOccupiedMeetingRoomDataToServer(){
@@ -370,7 +441,8 @@ void AddData(String teamId,String CardID,String numberOfParticipants,String temp
   client.flush();
 }
 
-void TestConnection(){
+boolean testConnection(){
+  String response="";
   client.connect(server, 80);
 
   if (client.connected()) {
@@ -385,9 +457,13 @@ void TestConnection(){
     while (client.available()) 
     { 
       char c = client.read();
-      Serial.print(c);
+      response= String(response+c);
     }
   }
   client.stop();
   client.flush();
+  //Print HTTP response content for debug purpose.
+  //Serial.println(response);
+  //Extract only the response if available.
+  return response.indexOf("true")>0;
 }
