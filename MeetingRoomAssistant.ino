@@ -1,6 +1,9 @@
 #include <SPI.h>
 #include <Ethernet.h>
 #include <RFID.h>
+
+#include <TimeLib.h>
+#include <TimeAlarms.h>
  
 #include <LiquidCrystal.h>
 
@@ -58,10 +61,16 @@ Adafruit_RGBLCDShield lcd = Adafruit_RGBLCDShield();
 #define EXTEND_MEETING_SETING_ITEM 10
 #define EXTEND_MEETING_SETING 20
 
+//Variable used to store the state(enables/disabled) of the below mentioned task.
+boolean T1_Disabled=false;
+AlarmId dataSending_FreeMeetingRoom;
+//Variable used to store the state(enables/disabled) of the below mentioned task.
+boolean T2_Disabled=true;
+AlarmId dataSending_OccupiedMeetingRoom;
+
+
 /*Variable used to store to current view displayed on LCD*/
 int lcdView=0;
-
-
 //Ethernet shield initialization
 byte mac[] = { 
   0x90, 0xA2, 0xDA, 0x0E, 0x03, 0xE2};
@@ -72,7 +81,6 @@ IPAddress gateway(192,168,0,1);
 IPAddress subnet(255,255,255,0);
 EthernetClient client;
 
-unsigned long lastUpdate = millis();
 
 void setup(){
   Serial.begin(9600); 
@@ -82,23 +90,36 @@ void setup(){
   lcd.begin(16, 2);               // start the library
   lcd.setCursor(0,0);             // set the LCD cursor position  
   lcd.setBacklight(WHITE);
+
+  /*Define the task for regular task for free meeting room related information to server*/
+  dataSending_FreeMeetingRoom= Alarm.timerRepeat(5,sendFreeMeetingRoomDataToServer);
+  /*Define the task for regular task for occupied meeting room related information to server*/
+  dataSending_OccupiedMeetingRoom=Alarm.timerRepeat(5,sendOccupiedMeetingRoomDataToServer);
+
+  /*Disable  the tasks at start and do the enabling only in loop.*/
+  Alarm.disable(dataSending_FreeMeetingRoom);
+  T1_Disabled=true;
+  Alarm.disable(dataSending_OccupiedMeetingRoom);
+  T2_Disabled=true;
   lcd.print("Hello, world!");
   delay(2000);
 }
 String AuthCardID;
 
-boolean ServerAuthorization = false;
 boolean RoomAvailability = true;
 String RoomState ="";
 
 int bookingTimeStamp;
 int remainingTime;
 
+//Defines the duration of a meeting in minutes.
 int BOCKING_PERIOD = 1;
+
 void loop()
 {   
-delay(500);
-//trackAttendants();
+Alarm.delay(1000);
+
+
  if( RoomAvailability == true){
     readCardIfAvailable();
   }
@@ -108,10 +129,12 @@ delay(500);
     freeMeetingRoomBehavior();
    Serial.println("Meeting room status is free!");
   }else{
+    occupiedMeetingRoomBehavior();
     int currentSecond=millis()/1000;
     //Stores how  much time passed since the  meeting room was booked
     int timeSinceBooking= currentSecond-bookingTimeStamp;
     remainingTime = BOCKING_PERIOD*60 - timeSinceBooking;
+      
     Serial.print("Remaining time:");
     Serial.println(remainingTime);
     RoomState = "BUSY";
@@ -132,16 +155,33 @@ delay(500);
     lcd.print(text);
     
   }
-  if(remainingTime == 0)
+  if(remainingTime <= 0)
   {
     RoomAvailability = true;
-  }
-   
+  }   
 }
 
 void freeMeetingRoomBehavior(){
+  if(T1_Disabled){
+   Alarm.disable(dataSending_OccupiedMeetingRoom);
+   T2_Disabled=true;
+   Alarm.enable(dataSending_FreeMeetingRoom);
+   T1_Disabled=false;
+   }  
+   
 }
-  
+void occupiedMeetingRoomBehavior(){
+  if(T2_Disabled){
+  Alarm.disable(dataSending_FreeMeetingRoom);
+  T1_Disabled=true;
+  Alarm.enable(dataSending_OccupiedMeetingRoom); 
+  T2_Disabled=false; 
+ }
+
+  //trackAttendants();
+
+}
+
 void readCardIfAvailable(){
     if (RC522.isCard()){
     AuthCardID ="";
@@ -216,8 +256,15 @@ void trackAttendants(){
  }
 
 
-
-
+void sendFreeMeetingRoomDataToServer(){
+  int temperature=readTemperature();
+  // AddData(1,"NA",,"NA", temperature);
+  Serial.println("Sending data to server in free meeting room behavior.");
+}
+void sendOccupiedMeetingRoomDataToServer(){
+  // AddData(1,"NA",,"NA", temperature);
+   Serial.println("Sending data to server for occupied meeting room behavior.");
+}
 
 /*
  * Method used to read the temperature as double result.
@@ -249,7 +296,6 @@ int handleMenuNavigation(int buttonPressed){
        }       
    }
    
-
   return TIMER_SCREEN;
  }
 
@@ -292,10 +338,10 @@ String value=String("cardID="+CardID);
  return response.indexOf("true")>0;
 }
 
-void AddData(String value,String CardID,String numberOfParticipants,String temperature){
+void AddData(String teamId,String CardID,String numberOfParticipants,String temperature){
   client.connect(server, 80);
 
- String teamValue=String("teamId="+value);
+ String teamValue=String("teamId="+teamId);
  String cardValue=String("&cardId="+CardID);
  String participantsValue=String("&numberOfParticipants="+numberOfParticipants);
  String temperatureValue=String("&temperature="+temperature);
