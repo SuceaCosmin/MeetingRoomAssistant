@@ -3,9 +3,6 @@
 #include <SPI.h>
 #include <Ethernet.h>
 #include <RFID.h>
-#include <TimeLib.h>
-#include <TimeAlarms.h>
-#include <LiquidCrystal.h>
 #include <Wire.h>
 #include <Adafruit_RGBLCDShield.h>
 #include <utility/Adafruit_MCP23017.h>
